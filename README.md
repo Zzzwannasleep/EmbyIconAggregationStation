@@ -17,8 +17,7 @@
 1. 登录到 [Cloudflare Workers](https://workers.cloudflare.com/)。
 2. 创建一个新的 Worker 项目。
 3. 将 [worker.js](https://github.com/Zzzwannasleep/EmbyIconAggregationStation/raw/refs/heads/main/worker.js) 文件内容复制到你的 Worker 脚本中。
-4. 配置 Cloudflare Workers，以允许跨域请求和定时任务。
-5. 部署并将 Worker 绑定到你的域名。
+4. 部署并将 Worker 绑定到你的域名。
 
 ### 创建和绑定 KV 存储
 
