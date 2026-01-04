@@ -5,7 +5,7 @@
 ## 功能
 
 - **聚合 Gist 链接**：支持合并多个 Gist 中的图标数据，生成一个新的聚合链接。
-- **定时更新**：定时从 Gist 更新图标数据，缓解Gist流控。
+- **定时更新**：定时从 Gist 更新图标数据，缓解流控。
 
 ## 使用说明
 
@@ -13,9 +13,29 @@
 
 1. 登录到 [Cloudflare Workers](https://workers.cloudflare.com/)。
 2. 创建一个新的 Worker 项目。
-3. 将 `[worker.js](https://github.com/Zzzwannasleep/EmbyIconAggregationStation/raw/refs/heads/main/worker.js)` 文件内容复制到你的 Worker 脚本中。
+3. 将 `worker.js` 文件内容复制到你的 Worker 脚本中。
 4. 配置 Cloudflare Workers，以允许跨域请求和定时任务。
 5. 部署并将 Worker 绑定到你的域名。
+
+### 创建和绑定 KV 存储
+
+在 Cloudflare Workers 中，使用 **KV 存储** 来保存每个 Gist 的聚合结果和配置数据。这里是如何创建和绑定 KV 存储的步骤：
+
+#### 1. 创建 KV 存储
+
+1. 在 Cloudflare Workers 仪表盘中，点击你的 Worker 项目。
+2. 在 Worker 项目页面，点击左侧的 **"KV"** 选项。
+3. 点击 **"Create a KV Namespace"**，为你的 KV 存储创建一个新的命名空间，命名为 `DB` 或任何你喜欢的名字。
+4. 点击 **"Save"** 保存命名空间。
+
+#### 2. 绑定 KV 存储到 Worker
+
+1. 在 Cloudflare Workers 项目的页面，点击左侧的 **"Settings"**。
+2. 在 **"KV Namespace Bindings"** 部分，点击 **"Add Binding"**。
+3. 将 **Namespace** 设置为你刚才创建的 KV 存储命名空间，并将 **Binding Name** 设置为 `DB`。
+4. 保存设置。
+
+这样就完成了 KV 存储的创建和绑定。
 
 ### 配置数据库
 
