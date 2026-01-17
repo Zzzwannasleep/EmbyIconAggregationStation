@@ -6,3 +6,6 @@ kv_namespaces = [
   # Cloudflare KV namespace for aggregated data/config; binding name must be "DB" to match worker.js
   { binding = "DB", id = "d9c22096137c4d3eb62a8e3de248e19f" }
 ]
+
+[triggers]
+crons = ["*/30 * * * *"]

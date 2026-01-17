@@ -20,33 +20,48 @@ export default {
     const path = url.pathname;
     const cache = caches.default;
 
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
+
     // Public share endpoint, now supports `.json` suffix
     if (path.startsWith("/share/")) {
-      let response = await cache.match(request);
-      if (response) return response;
-
       let slug = path.replace("/share/", "");
       if (slug.endsWith(".json")) slug = slug.slice(0, -5);
       if (!slug) return new Response("Missing slug", { status: 400, headers: corsHeaders });
 
+      const cacheKey = new Request(new URL(`/share/${slug}.json`, url.origin), request);
+      const currentRev = await env.DB.get(`REV:${slug}`);
+
+      const cached = await cache.match(cacheKey);
+      if (cached) {
+        if (!currentRev) return cached;
+        const cachedEtag = cached.headers.get("ETag");
+        if (cachedEtag === buildEtag(currentRev)) return cached;
+      }
+
       const data = await env.DB.get(`DATA:${slug}`);
       if (!data) return new Response("Not Found", { status: 404, headers: corsHeaders });
 
-      response = new Response(data, {
+      const dataUpdatedAt = getUpdatedAtFromData(data);
+      if (cached) {
+        const cachedEtag = cached.headers.get("ETag");
+        if (dataUpdatedAt && cachedEtag === buildEtag(dataUpdatedAt)) return cached;
+      }
+
+      const responseRev = dataUpdatedAt || currentRev;
+      const response = new Response(data, {
         headers: {
           "Content-Type": "application/json;charset=utf-8",
           "Access-Control-Allow-Origin": "*",
           "Cache-Control": "public, max-age=3600, s-maxage=86400",
           "Vary": "Accept-Encoding",
+          ...(responseRev ? { ETag: buildEtag(responseRev) } : {}),
         },
       });
 
-      ctx.waitUntil(cache.put(request, response.clone()));
+      ctx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
-    }
-
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: corsHeaders });
     }
 
     if (path === "/" || path === "/index.html") {
@@ -90,7 +105,10 @@ async function syncData(slug, gists, env) {
   let combinedIcons = [];
   let names = [];
 
-  const results = await Promise.allSettled(gists.map((u) => fetch(u).then((r) => r.json())));
+  const updatedAt = new Date().toISOString();
+  const results = await Promise.allSettled(
+    gists.map((sourceUrl) => fetch(addCacheBust(sourceUrl, updatedAt)).then((r) => r.json()))
+  );
 
   results.forEach((res) => {
     if (res.status === "fulfilled") {
@@ -103,20 +121,31 @@ async function syncData(slug, gists, env) {
   const finalData = JSON.stringify({
     name: names.join(" & ") || "Aggregated Icons",
     icons: combinedIcons,
-    updated_at: new Date().toLocaleString(),
+    updated_at: updatedAt,
   });
 
   await env.DB.put(`DATA:${slug}`, finalData);
+  await env.DB.put(`REV:${slug}`, updatedAt);
   return combinedIcons.length;
 }
 
 async function refreshAllConfigs(env) {
-  const list = await env.DB.list({ prefix: "CONFIG:" });
-  for (const key of list.keys) {
-    const slug = key.name.split(":")[1];
-    const gists = await env.DB.get(key.name);
-    if (gists) await syncData(slug, JSON.parse(gists), env);
-  }
+  let cursor = undefined;
+  let listComplete = false;
+  do {
+    const list = await env.DB.list({ prefix: "CONFIG:", cursor });
+    cursor = list.cursor;
+    listComplete = typeof list.list_complete === "boolean" ? list.list_complete : !cursor;
+    await mapWithConcurrency(list.keys, 5, async (key) => {
+      try {
+        const slug = key.name.split(":")[1];
+        const gists = await env.DB.get(key.name);
+        if (gists) await syncData(slug, JSON.parse(gists), env);
+      } catch (err) {
+        console.log("Failed to refresh config", key.name, err);
+      }
+    });
+  } while (!listComplete);
 }
 
 function renderHTML() {
@@ -257,4 +286,43 @@ function renderHTML() {
   </body>
   </html>
   `;
+}
+
+function buildEtag(rev) {
+  return `W/"${rev}"`;
+}
+
+function getUpdatedAtFromData(rawData) {
+  try {
+    const parsed = JSON.parse(rawData);
+    if (!parsed || typeof parsed !== "object") return undefined;
+    if (typeof parsed.updated_at !== "string" || !parsed.updated_at) return undefined;
+    return parsed.updated_at;
+  } catch {
+    return undefined;
+  }
+}
+
+function addCacheBust(rawUrl, cacheBust) {
+  try {
+    const url = new URL(rawUrl);
+    url.searchParams.set("_", cacheBust);
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function mapWithConcurrency(items, limit, iterator) {
+  const safeLimit = Math.max(1, Math.min(limit, items.length));
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: safeLimit }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      await iterator(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
 }
