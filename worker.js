@@ -43,13 +43,13 @@ export default {
       const data = await env.DB.get(`DATA:${slug}`);
       if (!data) return new Response("Not Found", { status: 404, headers: corsHeaders });
 
-      const dataUpdatedAt = getUpdatedAtFromData(data);
+      const dataRev = getRevFromData(data) || getUpdatedAtFromData(data);
       if (cached) {
         const cachedEtag = cached.headers.get("ETag");
-        if (dataUpdatedAt && cachedEtag === buildEtag(dataUpdatedAt)) return cached;
+        if (dataRev && cachedEtag === buildEtag(dataRev)) return cached;
       }
 
-      const responseRev = dataUpdatedAt || currentRev;
+      const responseRev = currentRev || dataRev;
       const response = new Response(data, {
         headers: {
           "Content-Type": "application/json;charset=utf-8",
@@ -105,9 +105,9 @@ async function syncData(slug, gists, env) {
   let combinedIcons = [];
   let names = [];
 
-  const updatedAt = new Date().toISOString();
+  const syncTime = new Date().toISOString();
   const results = await Promise.allSettled(
-    gists.map((sourceUrl) => fetch(addCacheBust(sourceUrl, updatedAt)).then((r) => r.json()))
+    gists.map((sourceUrl) => fetch(addCacheBust(sourceUrl, syncTime)).then((r) => r.json()))
   );
 
   results.forEach((res) => {
@@ -118,14 +118,18 @@ async function syncData(slug, gists, env) {
     }
   });
 
-  const finalData = JSON.stringify({
+  const payload = {
     name: names.join(" & ") || "Aggregated Icons",
     icons: combinedIcons,
-    updated_at: updatedAt,
-  });
+  };
+  const rev = await sha256Hex(JSON.stringify(payload));
+  const currentRev = await env.DB.get(`REV:${slug}`);
 
-  await env.DB.put(`DATA:${slug}`, finalData);
-  await env.DB.put(`REV:${slug}`, updatedAt);
+  // KV 写入很贵：内容没变就不写（尤其是 cron 每 30 分钟跑一次时）
+  if (currentRev && currentRev === rev) return combinedIcons.length;
+
+  const finalData = JSON.stringify({ ...payload, updated_at: syncTime, rev });
+  await Promise.all([env.DB.put(`DATA:${slug}`, finalData), env.DB.put(`REV:${slug}`, rev)]);
   return combinedIcons.length;
 }
 
@@ -303,6 +307,17 @@ function getUpdatedAtFromData(rawData) {
   }
 }
 
+function getRevFromData(rawData) {
+  try {
+    const parsed = JSON.parse(rawData);
+    if (!parsed || typeof parsed !== "object") return undefined;
+    if (typeof parsed.rev !== "string" || !parsed.rev) return undefined;
+    return parsed.rev;
+  } catch {
+    return undefined;
+  }
+}
+
 function addCacheBust(rawUrl, cacheBust) {
   try {
     const url = new URL(rawUrl);
@@ -325,4 +340,10 @@ async function mapWithConcurrency(items, limit, iterator) {
   });
 
   await Promise.all(workers);
+}
+
+async function sha256Hex(text) {
+  const encoded = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
